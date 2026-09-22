@@ -57,7 +57,7 @@ PUBLISH_ARGS = [
     # (BT.709 colorimetry so x264 emits timing_info), GOP 50 (2 s), and
     # sliced-threads off (-tune zerolatency enables it, producing ~20
     # slices/frame unlike real cameras' 1 slice/frame).
-    "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+    "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
     "-pix_fmt", "yuv420p", "-profile:v", "baseline", "-level:v", "3.1",
     "-g", "50", "-keyint_min", "50",
     "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
