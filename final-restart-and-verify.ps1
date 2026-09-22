@@ -1,0 +1,48 @@
+﻿$ErrorActionPreference = 'Stop'
+$Root = 'C:\ProgramData\HomelabScreenCamera'
+$py   = Join-Path $Root 'python\venv\Scripts\python.exe'
+$ff   = (Get-Command ffmpeg -ErrorAction Stop).Source
+$t    = Join-Path $env:LOCALAPPDATA 'hsc-final'
+$t0   = Get-Date
+
+'=== 0. derruba helper VELHO (quem esta na 8554) + publisher + mediamtx + bridge (tudo limpo) ==='
+Get-Process python,python3,python3.11,mediamtx,ffmpeg -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 3
+
+'=== 1. sobe: mediamtx(8556 interno) + bridge(8000) ==='
+$m = Start-Process -FilePath (Join-Path $Root 'mediamtx.exe') -ArgumentList (Join-Path $Root 'mediamtx.yml') -WorkingDirectory $Root -PassThru
+$b = Start-Process -FilePath $py -ArgumentList (Join-Path $Root 'bridge.py') -WorkingDirectory $Root -PassThru
+Start-Sleep -Seconds 4
+"mediamtx=$([bool](Get-Process -Id $m.Id -ErrorAction SilentlyContinue)) bridge=$([bool](Get-Process -Id $b.Id -ErrorAction SilentlyContinue))"
+
+'=== 2. sobe helper CORRIGIDO (args = strings puras, tupla no codigo) ==='
+$helperPath = Join-Path $Root 'rtsp-http-helper.py'
+$h = Start-Process -FilePath $py -ArgumentList @($helperPath,'0.0.0.0:8554','127.0.0.1:8556') -WorkingDirectory $Root -PassThru -RedirectStandardOutput "$t-helper.log" -RedirectStandardError "$t-helper-err.log"
+Start-Sleep -Seconds 4
+"helper=$([bool](Get-Process -Id $h.Id -ErrorAction SilentlyContinue)) pid=$($h.Id)"
+
+'=== 3. quem escuta 8554/8556/8000 ==='
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 8000,8554,8556 } | ForEach-Object {
+  $p=Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" -ErrorAction SilentlyContinue
+  "{0}:{1} <- {2} (pid {3})" -f $_.LocalAddress,$_.LocalPort,$p.Name,$_.OwningProcess
+}
+
+'=== 4. publisher ffmpeg -> via helper 8554 (publica desktop) ==='
+$pub = Start-Process -FilePath $ff -ArgumentList @('-hide_banner','-loglevel','error','-f','gdigrab','-framerate','15','-draw_mouse','1','-i','desktop','-an','-c:v','libx264','-preset','veryfast','-tune','zerolatency','-pix_fmt','yuv420p','-profile:v','main','-g','30','-keyint_min','30','-sc_threshold','0','-b:v','3000k','-maxrate','3000k','-bufsize','6000k','-rtsp_transport','tcp','-f','rtsp','rtsp://screen-publisher:change-publish-password@192.168.5.54:8554/desktop') -WorkingDirectory $Root -PassThru -RedirectStandardOutput "$t-pub.log" -RedirectStandardError "$t-pub-err.log"
+Start-Sleep -Seconds 6
+"publisher=$( [bool](Get-Process -Id $pub.Id -ErrorAction SilentlyContinue))"
+
+'=== 5. probe HTTP do Intelbras -> helper responde 200? ==='
+try { $r=Invoke-WebRequest -UseBasicParsing 'http://192.168.5.54:8554/' -TimeoutSec 8; "probe=$($r.StatusCode)" } catch { "probe ERR $($_.Exception.Message)" }
+
+'=== 6. leitura RTSP via helper + watchdog ASYNC (job derruba em 20s, nao pendura) ==='
+$job = Start-Job -ScriptBlock { param($ff,$url) & $ff -hide_banner -loglevel error -rtsp_transport tcp -i $url -frames:v 10 -f null - 2>&1; "exit=$LASTEXITCODE" } -ArgumentList $ff,'rtsp://192.168.5.54:8554/desktop'
+if (Wait-Job $job -Timeout 20) { "anon: $(Receive-Job $job)" } else { Stop-Job $job; "anon TIMEOUT(20s)" }; Remove-Job $job -Force
+$job2 = Start-Job -ScriptBlock { param($ff,$url) & $ff -hide_banner -loglevel error -rtsp_transport tcp -i $url -frames:v 10 -f null - 2>&1; "exit=$LASTEXITCODE" } -ArgumentList $ff,'rtsp://ovifadm:change-onvif-password@192.168.5.54:8554/desktop'
+if (Wait-Job $job2 -Timeout 20) { "onvif: $(Receive-Job $job2)" } else { Stop-Job $job2; "onvif TIMEOUT(20s)" }; Remove-Job $job2 -Force
+
+'=== 7. bridge health + snapshot ==='
+try { $r=Invoke-WebRequest -UseBasicParsing 'http://192.168.5.54:8000/health' -TimeoutSec 6; "health=$($r.StatusCode)" } catch { "health ERR $($_.Exception.Message)" }
+try { $r=Invoke-WebRequest -UseBasicParsing 'http://192.168.5.54:8000/snapshot' -TimeoutSec 15; "snapshot=$($r.StatusCode) bytes=$($r.RawContentLength)" } catch { "snapshot ERR $($_.Exception.Message)" }
+
+"=== total $([math]::Round(((Get-Date)-$t0).TotalSeconds))s â€” FIM (stack NO AR para o DVR testar) ==="

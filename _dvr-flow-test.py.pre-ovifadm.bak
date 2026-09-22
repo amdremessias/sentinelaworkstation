@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""_dvr-flow-test.py - simulates the exact Intelbras DVR ONVIF flow against
+the bridge: anonymous GetCapabilities, then GetProfiles + GetStreamUri on the
+Media 2.0 (ver20 / tr2) service, exactly like the DVR queries it.
+
+Usage: python _dvr-flow-test.py
+"""
+import base64
+import hashlib
+import os
+import secrets
+import urllib.request
+from datetime import datetime, timezone
+from xml.etree import ElementTree as ET
+
+DEVICE = "http://192.168.5.54:8000/onvif/device_service"
+MEDIA2 = "http://192.168.5.54:8000/onvif/media2_service"
+USER = os.getenv("ONVIF_USER", "onvif-admin")
+PASS = os.getenv("ONVIF_PASSWORD", "change-onvif-password")
+
+SOAP = "http://www.w3.org/2003/05/soap-envelope"
+TD = "http://www.onvif.org/ver10/device/wsdl"
+TT = "http://www.onvif.org/ver10/schema"
+TR2 = "http://www.onvif.org/ver20/media/wsdl"
+
+
+def password_digest(nonce_b64, created, password):
+    raw = base64.b64decode(nonce_b64) + created.encode() + password.encode()
+    return base64.b64encode(hashlib.sha1(raw).digest()).decode()
+
+
+def call(url, ns_body, action, body, anonymous=False):
+    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    nonce = base64.b64encode(secrets.token_bytes(16)).decode()
+    digest = password_digest(nonce, created, PASS)
+    if anonymous:
+        security = ""
+    else:
+        security = (
+            '<s:Header>'
+            '<Security xmlns="http://docs.oasis-open.org/wss/2004/01/'
+            'oasis-200401-wss-wssecurity-secext-1.0.xsd" '
+            'xmlns:u="http://docs.oasis-open.org/wss/2004/01/'
+            'oasis-200401-wss-wssecurity-utility-1.0.xsd">'
+            '<u:Timestamp><u:Created>%s</u:Created></u:Timestamp>'
+            '<UsernameToken><Username>%s</Username>'
+            '<Password Type="http://docs.oasis-open.org/wss/2004/01/'
+            'oasis-200401-wss-username-token-profile-1.0#PasswordDigest">%s</Password>'
+            '<Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/'
+            'oasis-200401-wss-soap-message-security-1.0#Base64Binary">%s</Nonce>'
+            '<u:Created>%s</u:Created></UsernameToken></Security></s:Header>'
+        ) % (created, USER, digest, nonce, created)
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<s:Envelope xmlns:s="%s" xmlns:tds="%s" xmlns:tt="%s" xmlns:tr2="%s">%s'
+        '<s:Body>%s</s:Body></s:Envelope>'
+    ) % (SOAP, TD, TT, TR2, security, body)
+    req = urllib.request.Request(
+        url,
+        data=xml.encode("utf-8"),
+        headers={
+            "Content-Type": 'application/soap+xml; charset=utf-8; action="%s/%s"' % (ns_body, action),
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
+def show(name, status, xml):
+    print("=" * 74)
+    print("== %s  (HTTP %d)" % (name, status))
+    try:
+        root = ET.fromstring(xml)
+        print(ET.tostring(root, encoding="unicode")[:1800])
+    except ET.ParseError as e:
+        print("XML INVALIDO: %s" % e)
+        print(xml[:800])
+    print()
+
+
+# 1) anonymous GetCapabilities (the DVR probes this WITHOUT credentials)
+s, x = call(DEVICE, TD, "GetCapabilities",
+            "<tds:GetCapabilities><tt:Category>All</tt:Category></tds:GetCapabilities>",
+            anonymous=True)
+show("GetCapabilities ANONIMO", s, x)
+
+# 2) GetProfiles on Media 2.0 service (exactly what the DVR sends)
+s, x = call(MEDIA2, TR2, "GetProfiles", "<tr2:GetProfiles><tr2:Type>All</tr2:Type></tr2:GetProfiles>")
+show("GetProfiles media2 (tr2:Type All)", s, x)
+
+# 3) GetStreamUri on Media 2.0 service
+s, x = call(MEDIA2, TR2, "GetStreamUri",
+            "<tr2:GetStreamUri><tr2:Protocol>RTSP</tr2:Protocol><tr2:ProfileToken>profile_1</tr2:ProfileToken></tr2:GetStreamUri>")
+show("GetStreamUri media2", s, x)
+
+# checks
+def has(root, nsuri, tag):
+    return root is not None and root.find(".//{%s}%s" % (nsuri, tag)) is not None
+
+s, x = call(MEDIA2, TR2, "GetProfiles", "<tr2:GetProfiles><tr2:Type>All</tr2:Type></tr2:GetProfiles>")
+try:
+    root = ET.fromstring(x)
+except ET.ParseError:
+    root = None
+print("CHECK  tr2:Profiles presente: %s" % has(root, TR2, "Profiles"))
+print("CHECK  tr2:Configurations presente: %s" % has(root, TR2, "Configurations"))
+print("CHECK  token/profile_1 presente: %s" % has(root, TR2, "Profiles"))
+
+s, x = call(MEDIA2, TR2, "GetStreamUri",
+            "<tr2:GetStreamUri><tr2:Protocol>RTSP</tr2:Protocol><tr2:ProfileToken>profile_1</tr2:ProfileToken></tr2:GetStreamUri>")
+try:
+    root = ET.fromstring(x)
+except ET.ParseError:
+    root = None
+print("CHECK  tr2:Uri presente no GetStreamUriResponse: %s" % has(root, TR2, "Uri"))

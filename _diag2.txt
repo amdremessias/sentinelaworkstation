@@ -1,0 +1,15 @@
+=== 1) dono :8554 ===
+  pid=36452 "C:\Users\m3ss14s\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe" C:\ProgramData\HomelabScreenCamera\rtsp-http-helper.py 0.0.0.0:8554 127.0.0.1:8556 C:\ProgramData\HomelabScreenCamera\_dial-8554-helper.log 
+
+=== 2) spy log do processo ATUAL=C:\ProgramData\HomelabScreenCamera\_dial-8554.log ===
+  [01:55:07.484] RTSP-REQ 192.168.5.31:47769 first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> relay
+  [01:55:07.485] RELAY-START 192.168.5.31:47769 upstream=127.0.0.1:8556
+  [01:55:19.469] RTSP-REQ 192.168.5.31:47851 first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> relay
+  [01:55:19.471] RELAY-START 192.168.5.31:47851 upstream=127.0.0.1:8556
+  [01:55:31.468] RTSP-REQ 192.168.5.31:47914 first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> relay
+  [01:55:31.489] RELAY-START 192.168.5.31:47914 upstream=127.0.0.1:8556
+
+=== 3) OPTIONS anonimo via 192.168.5.54:8554 (o DVR recebe isso) ===
+ERR Exceção ao chamar "Read" com "3" argumento(s): "Não é possível ler os dados da conexão de transporte: Uma tentativa de conexão falhou porque o componente conectado não respondeu
+corretamente após um período de tempo ou a conexão estabelecida falhou
+porque o host conectado não respondeu."

@@ -1,0 +1,18 @@
+﻿$ErrorActionPreference = 'Stop'
+$Root = $PSScriptRoot
+$env:DEVICE_IP = '192.168.5.54'
+$env:HTTP_PORT = '8000'
+$env:ONVIF_USER = 'ovifadm'
+$env:ONVIF_PASSWORD = 'change-onvif-password'
+# The URL handed to the DVR by GetStreamUri uses the ONVIF account, which also
+# has read permission on /desktop in mediamtx.yml. Address :8554 is the public
+# helper (rtsp-http-helper.py) that answers the Intelbras HTTP probe with 200
+# and proxies real RTSP to MediaMTX on the internal :8556.
+$env:RTSP_URL = 'rtsp://ovifadm:change-onvif-password@192.168.5.54:8554/desktop'
+$py = Join-Path $Root 'python\venv\Scripts\python.exe'
+$ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
+Start-Process -FilePath (Join-Path $Root 'mediamtx.exe') -ArgumentList (Join-Path $Root 'mediamtx.yml') -WorkingDirectory $Root
+Start-Process -FilePath $py -ArgumentList (Join-Path $Root 'bridge.py') -WorkingDirectory $Root
+Start-Process -FilePath $py -ArgumentList @(Join-Path $Root 'rtsp-http-helper.py', '0.0.0.0:8554', '127.0.0.1:8556') -WorkingDirectory $Root
+Write-Host 'MediaMTX, ponte ONVIF e helper HTTP/RTSP iniciados. A prÃ³xima janela ficarÃ¡ visÃ­vel durante a captura.'
+& $ffmpeg -hide_banner -f gdigrab -framerate 25 -draw_mouse 1 -i desktop -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" -an -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -profile:v baseline -level:v 4.0 -g 50 -keyint_min 50 -colorspace bt709 -color_primaries bt709 -color_trc bt709 -x264-params "sliced-threads=0" -sc_threshold 0 -b:v 3000k -maxrate 3000k -bufsize 6000k -rtsp_transport tcp -f rtsp 'rtsp://screen-publisher:change-publish-password@192.168.5.54:8554/desktop'

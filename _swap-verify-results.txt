@@ -1,0 +1,16 @@
+=== 1) dono atual :8554 ===
+  pid=50276
+  cmd="C:\Users\m3ss14s\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe" C:\ProgramData\HomelabScreenCamera\rtsp-http-helper.py 0.0.0.0:8554 127.0.0.1:8556 C:\ProgramData\HomelabScreenCamera\_dial-8554-new.log 
+=== 2) helper de disco: mtime=09/21/2026 02:47:45 hora-atual=09/21/2026 02:58:34
+=== 3) matando SOLO o dono da :8554 (nada mais) ===
+=== 4) subindo helper NOVO (OPTIONS-200-local + keepalive + relay rest) ===
+=== 5) dono NOVO :8554 -> pid=40668
+  cmd="C:\Users\m3ss14s\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe" C:\ProgramData\HomelabScreenCamera\rtsp-http-helper.py 0.0.0.0:8554 127.0.0.1:8556 C:\ProgramData\HomelabScreenCamera\_dial-8554.newer.log 
+=== 6) teste OPTIONS anonimo estilo-DVR (exatamente o que o Intelbras manda) ===
+  [OPTIONS-resp] RTSP/1.0 200 OK
+CSeq: 1
+Public: OPTIONS, DESCRIBE, SETUP, TEARDOWN, PLAY, PAUSE, GET_PARAMETER, SET_PARAMETER
+Server: Intelbras-ONVIF-Virtual-Camera/1.0
+  -> 200 OK: DVR deveria destravar e seguir pra DESCRIBE
+=== 7) log do HELPER NOVO: tem CONN do DVR APOS a religada? (viu DESCRIBE?) ===
+  [02:58:37.357] CONN 192.168.5.31:47268 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE

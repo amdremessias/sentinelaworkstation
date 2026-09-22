@@ -1,0 +1,43 @@
+logLevel: info
+
+rtsp: true
+# Internal-only: the publisher pushes to loopback and the public RTSP is
+# served by rtsp-http-helper.py on :8554 (answers the Intelbras HTTP probe
+# with 200 and proxies real RTSP here). Keeping MediaMTX off the LAN forces
+# DVRs to use :8554 so the probe quirk is always handled.
+rtspAddress: 127.0.0.1:8556
+# Accept basic and digest: some DVRs authenticate RTSP with digest.
+rtspAuthMethods: [basic, digest]
+
+authMethod: internal
+authInternalUsers:
+  - user: screen-publisher
+    pass: change-publish-password
+    permissions:
+      - action: publish
+        path: desktop
+  # The ONVIF account (same user/password configured for the bridge).
+  # Several DVRs ignore the credentials embedded in the RTSP URL and
+  # authenticate RTSP using the ONVIF account instead.
+  - user: ovifadm
+    pass: change-onvif-password
+    permissions:
+      - action: read
+        path: desktop
+  # Anonymous read: some DVRs strip credentials from the RTSP URL and
+  # connect without any Authorization header. Only expose this on a LAN
+  # you trust. Remove this block if you want authenticated read only.
+  - user: any
+    pass: ""
+    permissions:
+      - action: read
+        path: desktop
+
+paths:
+  desktop:
+    # Intelbras DVRs ask for RTP-over-UDP on the SETUP, but our public
+    # :8554 helper can only relay TCP sockets (RTP packets would go
+    # direct from :8556 to the DVR and never cross the relay). Force TCP
+    # so RTP is interleaved inside the same RTSP/TCP connection that the
+    # helper proxies end-to-end.
+    rtspTransport: tcp

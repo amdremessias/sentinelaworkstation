@@ -1,0 +1,53 @@
+import base64, hashlib, secrets, urllib.request, re
+from datetime import datetime, timezone
+
+USER, PASS = "onvif-admin", "change-onvif-password"
+SOAP = "http://www.w3.org/2003/05/soap-envelope"
+
+
+def digest(nonce_b64, created):
+    raw = base64.b64decode(nonce_b64) + created.encode() + PASS.encode()
+    return base64.b64encode(hashlib.sha1(raw).digest()).decode()
+
+
+def call(url, action_ns, action, body_ns):
+    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    nonce = base64.b64encode(secrets.token_bytes(16)).decode()
+    sec = (
+        '<s:Header><Security xmlns="http://docs.oasis-open.org/wss/2004/01/'
+        'oasis-200401-wss-wssecurity-secext-1.0.xsd" '
+        'xmlns:u="http://docs.oasis-open.org/wss/2004/01/'
+        'oasis-200401-wss-wssecurity-utility-1.0.xsd">'
+        '<u:Timestamp><u:Created>%s</u:Created></u:Timestamp>'
+        '<UsernameToken><Username>%s</Username>'
+        '<Password Type="http://docs.oasis-open.org/wss/2004/01/'
+        'oasis-200401-wss-username-token-profile-1.0#PasswordDigest">%s</Password>'
+        '<Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/'
+        'oasis-200401-wss-soap-message-security-1.0#Base64Binary">%s</Nonce>'
+        '<u:Created>%s</u:Created></UsernameToken></Security></s:Header>'
+    ) % (created, USER, digest(nonce, created), nonce, created)
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<s:Envelope xmlns:s="%s">%s'
+        '<s:Body><%s xmlns="%s"/></s:Body></s:Envelope>'
+    ) % (SOAP, sec, action, body_ns)
+    req = urllib.request.Request(
+        url, data=xml.encode(),
+        headers={"Content-Type": 'application/soap+xml; charset=utf-8; action="%s/%s"' % (action_ns, action)},
+        method="POST")
+    with urllib.request.urlopen(req, timeout=8) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def grab(xml, tag):
+    m = re.search(r"<[^>]*%s[^>]*>([^<]*)</[^>]*%s>" % (tag, tag), xml)
+    return m.group(1) if m else "AUSENTE"
+
+
+h, h2 = "http://www.onvif.org/ver10/media/wsdl", "http://www.onvif.org/ver20/media/wsdl"
+r1 = call("http://192.168.5.54:8000/onvif/media_service", h, "GetVideoEncoderConfigurations", h)
+r2 = call("http://192.168.5.54:8000/onvif/media2_service", h2, "GetVideoEncoderConfigurations", h2)
+print("tr1 FramerateLimit=%s | GovLength=%s" % (grab(r1, "FramerateLimit"), grab(r1, "GovLength")))
+print("tr2 FrameRateLimit=%s | GovLength=%s" % (grab(r2, "FrameRateLimit"), re.search(r'GovLength="([^"]+)"', r2).group(1) if 'GovLength="' in r2 else "AUSENTE"))
+# resolution too
+print("tr2 Width=%s Height=%s usado na resposta" % (grab(r2, "Width"), grab(r2, "Height")))

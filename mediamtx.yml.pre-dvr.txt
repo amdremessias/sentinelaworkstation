@@ -1,0 +1,18 @@
+logLevel: info
+rtsp: true
+rtspAddress: :8554
+authMethod: internal
+authInternalUsers:
+  - user: screen-publisher
+    pass: change-publish-password
+    permissions:
+      - action: publish
+        path: desktop
+  - user: dvr-reader
+    pass: change-read-password
+    permissions:
+      - action: read
+        path: desktop
+
+paths:
+  desktop: {}

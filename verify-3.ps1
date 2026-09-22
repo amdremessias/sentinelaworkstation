@@ -1,0 +1,49 @@
+﻿$ErrorActionPreference = 'Stop'
+$Root = 'C:\ProgramData\HomelabScreenCamera'
+$py   = Join-Path $Root 'python\venv\Scripts\python.exe'
+$mtx  = Join-Path $Root 'mediamtx.exe'
+$ff   = (Get-Command ffmpeg -ErrorAction Stop).Source
+$t    = "$env:LOCALAPPDATA\Temp\hlx"
+$t0   = Get-Date
+
+'=== A. derruba helper antigo (pid da 8554) + publishers, RELIGA helper corrigido (tupla) ==='
+$a = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object LocalPort -eq 8554 | Select-Object -First 1
+if ($a) { $op=$a.OwningProcess; $pp=Get-CimInstance Win32_Process -Filter "ProcessId=$op" -ErrorAction SilentlyContinue; "helper antigo pid=$op ($($pp.Name)) cmd=$($pp.CommandLine)"; Stop-Process -Id $op -Force -ErrorAction SilentlyContinue }
+Get-Process ffmpeg -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
+$hn = Start-Process -FilePath $py -ArgumentList @((Join-Path $Root 'rtsp-http-helper.py'),'0.0.0.0:8554','127.0.0.1:8556') -WorkingDirectory $Root -PassThru -RedirectStandardOutput "$t-helper.log" -RedirectStandardError "$t-helper-err.log"
+Start-Sleep -Seconds 3
+"helper novo alive=$([bool](Get-Process -Id $hn.Id -ErrorAction SilentlyContinue)) pid=$($hn.Id)"
+
+'=== B. quem escuta 8554 agora (deve ser o venv python) ==='
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object LocalPort -eq 8554 | ForEach-Object {
+  $pp=Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" -ErrorAction SilentlyContinue
+  "8554 <- $($pp.Name) pid=$($_.OwningProcess)"
+}
+
+'=== C. publisher ffmpeg -> via helper 8554 (probe HTTP remoto do DVR) ==='
+$pub = Start-Process -FilePath $ff -ArgumentList @('-hide_banner','-loglevel','error','-f','gdigrab','-framerate','15','-draw_mouse','1','-i','desktop','-an','-c:v','libx264','-preset','veryfast','-tune','zerolatency','-pix_fmt','yuv420p','-profile:v','main','-g','30','-keyint_min','30','-sc_threshold','0','-b:v','3000k','-maxrate','3000k','-bufsize','6000k','-rtsp_transport','tcp','-f','rtsp','rtsp://ovifadm:change-onvif-password@192.168.5.54:8554/desktop') -WorkingDirectory $Root -PassThru -RedirectStandardOutput "$t-pub.log" -RedirectStandardError "$t-pub-err.log"
+Start-Sleep -Seconds 6
+"publisher alive=$([bool](Get-Process -Id $pub.Id -ErrorAction SilentlyContinue))"
+
+'=== D. PROBE HTTP (Intelbras quirk) -> helper responde 200 ==='
+try { $r=Invoke-WebRequest -UseBasicParsing 'http://192.168.5.54:8554/' -TimeoutSec 8; "probe=$($r.StatusCode)" } catch { "probe ERR $($_.Exception.Message)" }
+
+'=== E. leitura RTSP VIA HELPER com watchdog de 25s (nao pendura) ==='
+'5a) anonimo:'
+$tout="$t-read-a.log"
+$w = Start-Job -ScriptBlock { param($ff,$url) & $ff -hide_banner -loglevel error -rtsp_transport tcp -i $url -frames:v 10 -f null - 2>&1 } -ArgumentList $ff,'rtsp://192.168.5.54:8554/desktop'
+if (Wait-Job $w -Timeout 25) { $o=Receive-Job $w; "anon OK exit=$LASTEXITCODE" } else { Stop-Job $w -ErrorAction SilentlyContinue; "anon TIMEOUT 25s" }
+Remove-Job $w -Force -ErrorAction SilentlyContinue
+
+'5b) ovifadm:'
+$w = Start-Job -ScriptBlock { param($ff,$url) & $ff -hide_banner -loglevel error -rtsp_transport tcp -i $url -frames:v 10 -f null - 2>&1 } -ArgumentList $ff,'rtsp://ovifadm:change-onvif-password@192.168.5.54:8554/desktop'
+if (Wait-Job $w -Timeout 25) { $o=Receive-Job $w; "onvif OK exit=$LASTEXITCODE" } else { Stop-Job $w -ErrorAction SilentlyContinue; "onvif TIMEOUT 25s" }
+Remove-Job $w -Force -ErrorAction SilentlyContinue
+
+'=== F. bridge health + snapshot ==='
+try { $r=Invoke-WebRequest -UseBasicParsing 'http://192.168.5.54:8000/health' -TimeoutSec 5; "health=$($r.StatusCode)" } catch { "health ERR $($_.Exception.Message)" }
+try { $r=Invoke-WebRequest -UseBasicParsing 'http://192.168.5.54:8000/snapshot' -TimeoutSec 12; "snapshot=$($r.StatusCode) bytes=$($r.RawContentLength)" } catch { "snapshot ERR $($_.Exception.Message)" }
+
+"=== total $([math]::Round(((Get-Date)-$t0).TotalSeconds))s === FIM ==="

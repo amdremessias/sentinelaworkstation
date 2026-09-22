@@ -1,0 +1,49 @@
+﻿$ErrorActionPreference = 'Stop'
+$Root = 'C:\ProgramData\HomelabScreenCamera'
+$ff   = (Get-Command ffmpeg -ErrorAction Stop).Source
+$py   = Join-Path $Root 'python\venv\Scripts\python.exe'
+
+'=== 0) derruba TUDO (limpo) ==='
+Get-Process python,python3,python3.11,mediamtx,mediamtx.exe,ffmpeg -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
+'=== 1) sobe: mediamtx(interno 8556) + bridge(8000) + helper(publico 8554->8556) ==='
+$t0 = Get-Date
+Start-Process -FilePath (Join-Path $Root 'mediamtx.exe') -ArgumentList (Join-Path $Root 'mediamtx.yml') -WorkingDirectory $Root
+Start-Process -FilePath $py -ArgumentList (Join-Path $Root 'bridge.py') -WorkingDirectory $Root
+Start-Process -FilePath $py -ArgumentList @('rtsp-http-helper.py','0.0.0.0:8554','127.0.0.1:8556') -WorkingDirectory $Root
+Start-Sleep -Seconds 4
+
+'=== 2) quem escuta 8000/8554/8556 agora ==='
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 8000,8554,8556 } | ForEach-Object {
+  $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" -ErrorAction SilentlyContinue
+  "{0}:{1} <- {2} (pid {3})" -f $_.LocalAddress,$_.LocalPort,$p.Name,$_.OwningProcess
+}
+
+'=== 3) publisher (gdigrab desktop) VIA helper p/ 8554 ==='
+$pubLog = Join-Path $Root 'publisher-helper.log'
+$pubErr = Join-Path $Root 'publisher-helper-err.log'
+$pub = Start-Process -FilePath $ff -ArgumentList @('-hide_banner','-loglevel','error','-f','gdigrab','-framerate','15','-draw_mouse','1','-i','desktop','-an','-c:v','libx264','-preset','veryfast','-tune','zerolatency','-pix_fmt','yuv420p','-profile:v','main','-g','30','-keyint_min','30','-sc_threshold','0','-b:v','3000k','-maxrate','3000k','-bufsize','6000k','-rtsp_transport','tcp','-f','rtsp','rtsp://screen-publisher:change-publish-password@127.0.0.1:8554/desktop') -WorkingDirectory $Root -PassThru -RedirectStandardOutput $pubLog -RedirectStandardError $pubErr
+Start-Sleep -Seconds 6
+"publisher alive=$([bool](Get-Process -Id $pub.Id -ErrorAction SilentlyContinue)) pid=$($pub.Id)"
+
+'=== 4) PROBE HTTP do Intelbras: helper deve responder 200 ==='
+try { $r = Invoke-WebRequest -UseBasicParsing 'http://192.168.5.54:8554/' -TimeoutSec 8; "probe HTTP -> $($r.StatusCode)" } catch { "probe ERR $($_.Exception.Message)" }
+
+'=== 5) leitura RTSP VIA HELPER (8554), COM -stimeout 15s p/ nao pendurar ==='
+'5a) anonimo:'
+& $ff -hide_banner -loglevel error -stimeout 15000000 -rtsp_transport tcp -i 'rtsp://192.168.5.54:8554/desktop' -frames:v 10 -f null - 2>&1
+"anon exit=$LASTEXITCODE"
+'5b) ovifadm:'
+& $ff -hide_banner -loglevel error -stimeout 15000000 -rtsp_transport tcp -i 'rtsp://ovifadm:change-onvif-password@192.168.5.54:8554/desktop' -frames:v 10 -f null - 2>&1
+"ovifadm exit=$LASTEXITCODE"
+
+'=== 6) bridge health + snapshot via IP LAN ==='
+try { $r = Invoke-WebRequest -UseBasicParsing 'http://192.168.5.54:8000/health' -TimeoutSec 5; "health=$($r.StatusCode)" } catch { "health ERR $($_.Exception.Message)" }
+try { $r = Invoke-WebRequest -UseBasicParsing 'http://192.168.5.54:8000/snapshot' -TimeoutSec 12; "snapshot=$($r.StatusCode) bytes=$($r.RawContentLength)" } catch { "snap ERR $($_.Exception.Message)" }
+
+'=== 7) mediamtx (interno 8556): PUBLICOU desktop? ==='
+$apiLog = Join-Path $Root 'mediamtx-internal.log'
+if (Test-Path $apiLog) { Select-String -Path $apiLog -Pattern 'desktop','publisher' | Select-Object -Last 5 | ForEach-Object { $_.Line } }
+'=== fim (total segundos) ==='
+[math]::Round(((Get-Date)-$t0).TotalSeconds)

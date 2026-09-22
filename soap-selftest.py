@@ -1,0 +1,181 @@
+﻿#!/usr/bin/env python3
+"""soap-selftest.py - ONVIF SOAP self-test for the HomelabScreenCamera bridge.
+
+Builds WS-Security UsernameToken (password digest) requests and checks the
+bridge answers the way an Intelbras DVR expects:
+  * network-config reads (Get) -> valid responses
+  * network-config writes (Set*) -> valid empty ...Response (the fix for
+    "O servidor retornou uma Falha SOAP invalida")
+  * unknown ops -> well-formed SOAP 1.2 Fault with ter:ActionNotSupported
+  * anonymous ops -> 200 without credentials
+"""
+import base64
+import hashlib
+import os
+import secrets
+import sys
+import urllib.request
+from datetime import datetime, timezone
+from xml.etree import ElementTree as ET
+
+DEVICE = os.getenv("ONVIF_DEVICE", "http://192.168.5.54:8000/onvif/device_service")
+USER = os.getenv("ONVIF_USER", "ovifadm")
+PASS = os.getenv("ONVIF_PASSWORD", "change-onvif-password")
+
+SOAP = "http://www.w3.org/2003/05/soap-envelope"
+TD = "http://www.onvif.org/ver10/device/wsdl"
+TT = "http://www.onvif.org/ver10/schema"
+
+failures = []
+
+
+def password_digest(nonce_b64, created, password):
+    raw = base64.b64decode(nonce_b64) + created.encode() + password.encode()
+    return base64.b64encode(hashlib.sha1(raw).digest()).decode()
+
+
+def call(action, body, anonymous=False):
+    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    nonce = base64.b64encode(secrets.token_bytes(16)).decode()
+    digest = password_digest(nonce, created, PASS)
+    body_xml = "".join(body)
+    if anonymous:
+        security = ""
+    else:
+        security = (
+            '<s:Header>'
+            '<Security xmlns="http://docs.oasis-open.org/wss/2004/01/'
+            'oasis-200401-wss-wssecurity-secext-1.0.xsd" '
+            'xmlns:u="http://docs.oasis-open.org/wss/2004/01/'
+            'oasis-200401-wss-wssecurity-utility-1.0.xsd">'
+            '<u:Timestamp><u:Created>%s</u:Created></u:Timestamp>'
+            '<UsernameToken><Username>%s</Username>'
+            '<Password Type="http://docs.oasis-open.org/wss/2004/01/'
+            'oasis-200401-wss-username-token-profile-1.0#PasswordDigest">%s</Password>'
+            '<Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/'
+            'oasis-200401-wss-soap-message-security-1.0#Base64Binary">%s</Nonce>'
+            '<u:Created>%s</u:Created></UsernameToken></Security></s:Header>'
+        ) % (created, USER, digest, nonce, created)
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<s:Envelope xmlns:s="%s" xmlns:tds="%s" xmlns:tt="%s">%s'
+        '<s:Body>%s</s:Body></s:Envelope>'
+    ) % (SOAP, TD, TT, security, body_xml)
+    req = urllib.request.Request(
+        DEVICE,
+        data=xml.encode("utf-8"),
+        headers={
+            "Content-Type": 'application/soap+xml; charset=utf-8; action="http://www.onvif.org/ver10/device/wsdl/%s"' % action,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
+def check(name, status, xml, expect):
+    ok = True
+    problems = []
+    if status != 200:
+        ok = False
+        problems.append("HTTP %d" % status)
+    root = None
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError as e:
+        ok = False
+        problems.append("XML invalido: %s" % e)
+    for el, must in expect:
+        found = root is not None and root.find(el) is not None
+        if found != must:
+            ok = False
+            problems.append("elemento %s presente=%s (esperado %s)" % (el.split("}")[-1], found, must))
+    if ok:
+        print("PASS  %s" % name)
+    else:
+        failures.append(name)
+        print("FAIL  %s  --  %s" % (name, "; ".join(problems)))
+    return root
+
+
+body = lambda op, inner="": "<tds:%s>%s</tds:%s>" % (op, inner, op)
+find = lambda nsuri, tag: ".//{%s}%s" % (nsuri, tag)
+
+# --- anonymous ---
+s, x = call("GetSystemDateAndTime", [body("GetSystemDateAndTime")], anonymous=True)
+check("anonymous GetSystemDateAndTime (sem auth)", s, x, [(find(TD, "GetSystemDateAndTimeResponse"), True)])
+s, x = call("GetDeviceInformation", [body("GetDeviceInformation")], anonymous=True)
+check("anonymous GetDeviceInformation (sem auth)", s, x, [(find(TD, "GetDeviceInformationResponse"), True)])
+
+# --- authenticated reads (network config screen) ---
+s, x = call("GetNetworkInterfaces", [body("GetNetworkInterfaces")])
+check("GetNetworkInterfaces", s, x, [(find(TT, "NetworkInterfaces"), True)])
+s, x = call("GetNetworkProtocols", [body("GetNetworkProtocols")])
+check("GetNetworkProtocols", s, x, [(find(TT, "NetworkProtocols"), True)])
+s, x = call("GetNetworkDefaultGateway", [body("GetNetworkDefaultGateway")])
+check("GetNetworkDefaultGateway", s, x, [(find(TT, "NetworkGateway"), True)])
+s, x = call("GetDNS", [body("GetDNS")])
+check("GetDNS", s, x, [(find(TT, "DNS"), True)])
+s, x = call("GetNTP", [body("GetNTP")])
+check("GetNTP", s, x, [(find(TT, "NTP"), True)])
+s, x = call("GetHostname", [body("GetHostname")])
+check("GetHostname", s, x, [(find(TT, "Hostname"), True)])
+
+# --- authenticated writes (the "Falha SOAP invalida" fix) ---
+s, x = call("SetNetworkInterfaces", [body("SetNetworkInterfaces", "<tt:InterfaceToken>eth0</tt:InterfaceToken><tt:NetworkInterface><tt:Enabled>true</tt:Enabled><tt:IPv4><tt:Enabled>true</tt:Enabled><tt:Manual><tt:Address>192.168.5.54</tt:Address><tt:PrefixLength>24</tt:PrefixLength></tt:Manual></tt:IPv4></tt:NetworkInterface>")])
+check("SetNetworkInterfaces -> resposta vazia valida", s, x, [(find(TD, "SetNetworkInterfacesResponse"), True)])
+s, x = call("SetNetworkProtocols", [body("SetNetworkProtocols")])
+check("SetNetworkProtocols", s, x, [(find(TD, "SetNetworkProtocolsResponse"), True)])
+s, x = call("SetNetworkDefaultGateway", [body("SetNetworkDefaultGateway", "<tt:IPv4Address>192.168.5.1</tt:IPv4Address>")])
+check("SetNetworkDefaultGateway", s, x, [(find(TD, "SetNetworkDefaultGatewayResponse"), True)])
+s, x = call("SetDNS", [body("SetDNS", "<tt:FromDHCP>false</tt:FromDHCP>")])
+check("SetDNS", s, x, [(find(TD, "SetDNSResponse"), True)])
+s, x = call("SetNTP", [body("SetNTP", "<tt:FromDHCP>true</tt:FromDHCP>")])
+check("SetNTP", s, x, [(find(TD, "SetNTPResponse"), True)])
+s, x = call("SetHostname", [body("SetHostname", "<tt:Name>homelab</tt:Name>")])
+check("SetHostname", s, x, [(find(TD, "SetHostnameResponse"), True)])
+s, x = call("SetSystemDateAndTime", [body("SetSystemDateAndTime")])
+check("SetSystemDateAndTime", s, x, [(find(TD, "SetSystemDateAndTimeResponse"), True)])
+s, x = call("SetUser", [body("SetUser", "<tt:User><tt:Username>ovifadm</tt:Username><tt:UserLevel>Administrator</tt:UserLevel></tt:User>")])
+check("SetUser", s, x, [(find(TD, "SetUserResponse"), True)])
+
+# --- unsupported op -> well-formed Fault (not "invalid fault") ---
+s, x = call("SetSystemReboot", [body("SetSystemReboot", "<tt:Delay>5</tt:Delay>")])
+root = check("SetSystemReboot(desconhecido) -> Fault ter:", s, x, [
+    (find(SOAP, "Fault"), True),
+    (find(SOAP, "Subcode"), True),
+    (find(TER := "http://www.onvif.org/ver10/error", "Text"), True),
+])
+if root is not None:
+    sub = root.find(".//{http://www.w3.org/2003/05/soap-envelope}Subcode/{http://www.w3.org/2003/05/soap-envelope}Value")
+    if sub is None or "ActionNotSupported" not in (sub.text or ""):
+        failures.append("Subcode-ActionNotSupported")
+        print("FAIL  Subcode ter:ActionNotSupported ausente (got=%r)" % (sub.text if sub is not None else None))
+    else:
+        print("PASS  Fault subcode = %s" % sub.text)
+
+# --- wrong password -> Fault NotAuthorized ---
+_wrong = PASS
+try:
+    saved = PASS
+    globals()["PASS"] = "senha-errada"
+    s, x = call("GetUsers", [body("GetUsers")])
+finally:
+    globals()["PASS"] = saved
+root = check("senha errada -> Fault NotAuthorized", s, x, [(find(SOAP, "Fault"), True)])
+if root is not None:
+    sub = root.find(".//{http://www.w3.org/2003/05/soap-envelope}Subcode/{http://www.w3.org/2003/05/soap-envelope}Value")
+    if sub is None or "NotAuthorized" not in (sub.text or ""):
+        failures.append("Subcode-NotAuthorized")
+        print("FAIL  Subcode ter:NotAuthorized ausente (got=%r)" % (sub.text if sub is not None else None))
+    else:
+        print("PASS  Fault subcode = %s" % sub.text)
+
+print()
+if failures:
+    print("RESULTADO: %d FALHAS -> %s" % (len(failures), ", ".join(failures)))
+    sys.exit(1)
+print("RESULTADO: todos os testes ONVIF passaram")

@@ -1,0 +1,27 @@
+=== estado 09/21/2026 11:29:24 ===
+--- 1) listeners: 8000 (bridge) | 8554 (helper) | 8556 (mtx-interno) | 8554-pub? ---
+  :8000 -> pid=42608
+     cmd="C:\Users\m3ss14s\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe" C:\ProgramData\HomelabScreenCamera\bridge.py 
+  :8554 -> pid=40668
+     cmd="C:\Users\m3ss14s\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe" C:\ProgramData\HomelabScreenCamera\rtsp-http-helper.py 0.0.0.0:8554 127.0.0.1:8556 C:\ProgramData\HomelabScreenCamera\_dial-8554.newer.log 
+  :8556 -> pid=45876
+     cmd="C:\ProgramData\HomelabScreenCamera\mediamtx.exe" C:\ProgramData\HomelabScreenCamera\mediamtx.yml 
+--- 2) bridge /health via LAN (o que da o VERDE) ---
+  /health -> 200 {"status": "ok"}
+--- 3) mediaMTX ativo? publisher ainda publica desktop? ---
+  mediamtx pid=45876 started=09/21/2026 01:10:11
+  ffmpeg publisher: NENHUM com 8556/desktop!
+--- 4) ultimas CONN da :8554 (helper novo) ---
+  [11:26:32.991] CONN 192.168.5.31:36822 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:33.417] CONN 192.168.5.31:36851 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:33.821] CONN 192.168.5.31:36879 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:34.293] CONN 192.168.5.31:36908 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:34.751] CONN 192.168.5.31:36937 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:35.245] CONN 192.168.5.31:36970 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:35.754] CONN 192.168.5.31:37003 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:36.221] CONN 192.168.5.31:37036 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:36.741] CONN 192.168.5.31:37069 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:37.157] CONN 192.168.5.31:37095 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:37.806] CONN 192.168.5.31:37146 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+  [11:26:42.608] CONN 192.168.5.31:37186 OPTIONS first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-KEEPALIVE
+--- 5) ultimas linhas mediaMTX (sessao desktop?) ---

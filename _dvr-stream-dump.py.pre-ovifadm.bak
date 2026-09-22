@@ -1,0 +1,145 @@
+"""Dump 6s of the DVR-visible RTP (TCP interleaved, exact DVR client behavior)
+into _dvr-raw.bin and print an AU-by-AU ground-truth analysis."""
+import socket
+import struct
+import time
+import re
+
+HOST, PORT, PATH = "127.0.0.1", 8554, "/desktop"
+
+
+def recv_until_headers(sock):
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+
+def req(sock, method, target, cseq, extra=""):
+    r = f"{method} {target} RTSP/1.0\r\nCSeq: {cseq}\r\n{extra}User-Agent: dvr-preview/1.0\r\n\r\n"
+    sock.sendall(r.encode())
+    buf = recv_until_headers(sock)
+    return buf
+
+
+s = socket.create_connection((HOST, PORT), timeout=8)
+s.settimeout(3.0)
+base = f"rtsp://onvif-admin:change-onvif-password@{HOST}:{PORT}{PATH}"
+req(s, "OPTIONS", base, 1)
+sdp = req(s, "DESCRIBE", base, 2, "Accept: application/sdp\r\n")
+print("=== SDP servido (DESCRIBE, igual ao que o DVR recebe) ===")
+print(sdp.decode("utf-8", "replace"))
+set_buf = req(s, "SETUP", base + "/trackID=0", 3,
+              "Transport: RTP/AVP/TCP;unicast;interleaved=0-1;mode=play\r\n")
+m = re.search(rb"Session:\s*([^\r\n;]+)", set_buf)
+session_id = m.group(1).decode() if m else ""
+req(s, "PLAY", base + "/", 4, f"Session: {session_id}\r\nRange: npt=0.000000-\r\n")
+
+raw = b""
+deadline = time.time() + 6.0
+while time.time() < deadline:
+    try:
+        chunk = s.recv(65536)
+    except socket.timeout:
+        continue
+    if not chunk:
+        break
+    raw += chunk
+s.close()
+with open(r"C:\ProgramData\HomelabScreenCamera\_dvr-raw.bin", "wb") as f:
+    f.write(raw)
+print(f"captured {len(raw)} bytes of interleaved stream, hora do dump: {time.strftime('%H:%M:%S')}")
+
+print("\n=== Analise AU-por-AU ===")
+
+
+def parse_nal(payload):
+    """Return list of (nal_type, size) inside an RTP payload (plain / FU-A / STAP-A)."""
+    if not payload:
+        return []
+    t = payload[0] & 0x1F
+    out = []
+    if t == 28:  # FU-A
+        if len(payload) > 1:
+            out.append(("FU", payload[1] & 0x1F, len(payload) - 2))
+    elif t == 24:  # STAP-A
+        i = 1
+        while i + 2 <= len(payload):
+            nlen = (payload[i] << 8) | payload[i + 1]
+            i += 2
+            if i + nlen > len(payload):
+                break
+            out.append(("S", payload[i] & 0x1F, nlen))
+            i += nlen
+    elif t == 25:  # STAP-B
+        i = 1
+        while i + 4 <= len(payload):
+            nlen = (payload[i + 2] << 8) | payload[i + 3]
+            i += 4
+            if i + nlen > len(payload):
+                break
+            out.append(("SB", payload[i] & 0x1F, nlen))
+            i += nlen
+    else:
+        out.append(("P", t, len(payload)))
+    return out
+
+
+buf = raw
+au_list = []  # list of dicts: ts_start, nals (list of (kind,type,size))
+cur = {"ts": None, "nals": []}
+pkt_count = 0
+idr_count = 0
+sps_count = 0
+pps_count = 0
+while len(buf) >= 4 and buf[0:1] == b"$":
+    chan = buf[1]
+    (plen,) = struct.unpack(">H", buf[2:4])
+    if len(buf) < 4 + plen:
+        break
+    pkt = buf[4:4 + plen]
+    buf = buf[4 + plen:]
+    if chan != 0 or len(pkt) < 12:
+        continue
+    pkt_count += 1
+    mbit = (pkt[1] >> 7) & 1
+    ts = struct.unpack(">I", pkt[4:8])[0]
+    payload = pkt[12:]
+    nals = parse_nal(payload)
+    for kind, t, size in nals:
+        cur["nals"].append((kind, t, size))
+        if t == 5:
+            idr_count += 1
+        elif t == 7:
+            sps_count += 1
+        elif t == 8:
+            pps_count += 1
+    if cur["ts"] is None:
+        cur["ts"] = ts
+    if mbit:
+        au_list.append(cur)
+        cur = {"ts": None, "nals": []}
+if cur["nals"]:
+    au_list.append(cur)
+
+print(f"RTP packets: {pkt_count} | AUs (frames): {len(au_list)} "
+      f"| IDR NALs: {idr_count} | SPS: {sps_count} | PPS: {pps_count}")
+
+for i, au in enumerate(au_list[:12]):
+    kinds = [f"{k}{t}" for k, t, _ in au["nals"]]
+    print(f"  AU{i + 1:>2} ts={au['ts']} nals={len(au['nals']):>3} {kinds[:10]}")
+if len(au_list) > 12:
+    print(f"  ... ({len(au_list) - 12} AUs restantes)")
+
+# resumo por janela de 2s de tempo RTP
+if au_list:
+    base_ts = au_list[0]["ts"]
+    window_idrs = {}
+    for au in au_list:
+        w = int((au["ts"] - base_ts) / 90000 / 2)
+        n_idr = sum(1 for _, t, _ in au["nals"] if t == 5)
+        window_idrs[w] = window_idrs.get(w, 0) + n_idr
+    print("\nIDRs por janela de 2s:", dict(sorted(window_idrs.items())))

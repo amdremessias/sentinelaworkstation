@@ -1,0 +1,19 @@
+=== check-after-readd 09/21/2026 12:59:35 ===
+--- 1) listeners ---
+  :8000 pid=42608
+  :8554 pid=35260
+  :8556 pid=45876
+--- 2) helper dono :8554 (tem que ser o KEEPALIVE2:CSeq-echo) ---
+  pid=35260
+  cmd="C:\Users\m3ss14s\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe" C:\ProgramData\HomelabScreenCamera\rtsp-http-helper.py 0.0.0.0:8554 127.0.0.1:8556 C:\ProgramData\HomelabScreenCamera\_dial-8554.keepalive2.log 
+--- 3) bridge /health (verde vem daqui) ---
+  /health -> OK: {"status":"ok"}
+--- 4) log helper KEEPALIVE2: conectou DVR (192.168.5.31) apos re-add? ---
+  total=2
+  do-DVR(192.168.5.31)=0
+  --- do-DVR (todas) ---
+    (NENHUMA conexao do DVR apos o re-add!)
+  --- ultimas 6 (geral) ---
+    [11:40:35.577] HELPER-UP listen=0.0.0.0:8554 upstream=127.0.0.1:8556 -> OPTIONS-200-ECHO-CSEQ-KEEPALIVE
+    [11:40:40.525] CONN 127.0.0.1:22469 OPTIONS CSeq=b'9' first=[b'OPTIONS rtsp://192.168.5.54:8554/desktop RTSP/1.0'] -> 200-local-echo-CSeq-KEEPALIVE
+=== fim 09/21/2026 12:59:41 ===

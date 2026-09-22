@@ -1,0 +1,50 @@
+    if method == b"OPTIONS":
+        # Intelbras DVR: mantem o live view na MESMA conexao TCP. Responde o
+        # OPTIONS com 200 local (sem 401 -> senao o DVR trava no "carregando")
+        # e NAO fecha: deixa a socket aberta e relay do restante (DESCRIBE/SETUP/
+        # PLAY) pro MediaMTX na mesma conexao, como uma camera Intelbras real.
+        log(f"CONN {addr[0]}:{addr[1]} OPTIONS first=[{first_line[:80]!r}] -> 200-local + keepalive-relay")
+        try:
+            conn.sendall(RTSP_200_OPTIONS)
+        except OSError:
+            try:
+                conn.close()
+            except OSError:
+                pass
+            return
+        # Keep the same TCP connection: relay the remainder to MediaMTX.
+        try:
+            up = socket.create_connection(UPSTREAM_ADDR, timeout=8.0)
+        except OSError as e:
+            log(f"CONN {addr[0]}:{addr[1]} OPTIONS upstream-ERR {e!r}")
+            try:
+                conn.close()
+            except OSError:
+                pass
+            return
+        t1 = threading.Thread(target=relay, args=(conn, up), daemon=True)
+        t2 = threading.Thread(target=relay, args=(up, conn), daemon=True)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        return
+
+    # Real RTSP request (DESCRIBE/SETUP/PLAY/...) -> proxy to MediaMTX.
+    log(f"CONN {addr[0]}:{addr[1]} RTSP first=[{first_line[:80]!r}] -> relay")
+    try:
+        up = socket.create_connection(UPSTREAM_ADDR, timeout=8.0)
+        up.sendall(head)
+    except OSError as e:
+        log(f"CONN {addr[0]}:{addr[1]} upstream-ERR {e!r}")
+        try:
+            conn.close()
+        except OSError:
+            pass
+        return
+    t1 = threading.Thread(target=relay, args=(conn, up), daemon=True)
+    t2 = threading.Thread(target=relay, args=(up, conn), daemon=True)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()

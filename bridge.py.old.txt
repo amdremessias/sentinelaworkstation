@@ -1,0 +1,109 @@
+﻿import base64
+import hashlib
+import os
+import secrets
+from datetime import datetime, timezone
+from aiohttp import web
+from lxml import etree
+
+DEVICE_IP = os.getenv("DEVICE_IP", "192.168.5.54")
+HTTP_PORT = int(os.getenv("HTTP_PORT", "8000"))
+RTSP_URL = os.getenv("RTSP_URL", "rtsp://dvr-reader:change-read-password@192.168.5.54:8554/desktop")
+ONVIF_USER = os.getenv("ONVIF_USER", "ovifadm")
+ONVIF_PASSWORD = os.getenv("ONVIF_PASSWORD", "change-onvif-password")
+SOAP = "http://www.w3.org/2003/05/soap-envelope"
+TD = "http://www.onvif.org/ver10/device/wsdl"
+MEDIA = "http://www.onvif.org/ver10/media/wsdl"
+TT = "http://www.onvif.org/ver10/schema"
+NSMAP = {"s": SOAP, "tds": TD, "trt": MEDIA, "tt": TT}
+
+
+def response(element):
+    env = etree.Element(etree.QName(SOAP, "Envelope"), nsmap=NSMAP)
+    etree.SubElement(env, etree.QName(SOAP, "Body")).append(element)
+    return web.Response(body=etree.tostring(env, xml_declaration=True, encoding="UTF-8"), content_type="application/soap+xml")
+
+
+def fault(message):
+    f = etree.Element(etree.QName(SOAP, "Fault"), nsmap=NSMAP)
+    code = etree.SubElement(f, etree.QName(SOAP, "Code")); etree.SubElement(code, etree.QName(SOAP, "Value")).text = "s:Sender"
+    reason = etree.SubElement(f, etree.QName(SOAP, "Reason")); etree.SubElement(reason, etree.QName(SOAP, "Text")).text = message
+    return response(f)
+
+
+def created_ok(value, skew=300):
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+        return abs((datetime.now(timezone.utc) - dt).total_seconds()) <= skew
+    except ValueError:
+        return False
+
+
+def authenticated(root):
+    user = root.find(".//{*}Username"); pwd = root.find(".//{*}Password")
+    nonce = root.find(".//{*}Nonce"); created = root.find(".//{*}Created")
+    if any(x is None for x in (user, pwd, nonce, created)) or user.text != ONVIF_USER or not created_ok(created.text): return False
+    try:
+        raw = base64.b64decode(nonce.text) + created.text.encode() + ONVIF_PASSWORD.encode()
+        expected = base64.b64encode(hashlib.sha1(raw).digest()).decode()
+        return secrets.compare_digest(expected, pwd.text)
+    except Exception:
+        return False
+
+
+def date_time():
+    now = datetime.now(timezone.utc)
+    r = etree.Element(etree.QName(TD, "GetSystemDateAndTimeResponse"), nsmap=NSMAP)
+    s = etree.SubElement(r, etree.QName(TT, "SystemDateAndTime"))
+    etree.SubElement(s, etree.QName(TT, "DateTimeType")).text = "NTP"
+    etree.SubElement(s, etree.QName(TT, "DaylightSavings")).text = "false"
+    z = etree.SubElement(s, etree.QName(TT, "TimeZone")); etree.SubElement(z, etree.QName(TT, "TZ")).text = "BRT3"
+    u = etree.SubElement(s, etree.QName(TT, "UTCDateTime")); d = etree.SubElement(u, etree.QName(TT, "Date")); t = etree.SubElement(u, etree.QName(TT, "Time"))
+    for tag, val in (("Year", now.year), ("Month", now.month), ("Day", now.day)): etree.SubElement(d, etree.QName(TT, tag)).text = str(val)
+    for tag, val in (("Hour", now.hour), ("Minute", now.minute), ("Second", now.second)): etree.SubElement(t, etree.QName(TT, tag)).text = str(val)
+    return response(r)
+
+
+def device_info():
+    r = etree.Element(etree.QName(TD, "GetDeviceInformationResponse"), nsmap=NSMAP)
+    for k, v in {"Manufacturer":"Homelab", "Model":"VirtualScreenCamera", "FirmwareVersion":"0.1-beta", "SerialNumber":"VSC-001", "HardwareId":"VSC"}.items(): etree.SubElement(r, etree.QName(TD, k)).text = v
+    return response(r)
+
+
+def capabilities():
+    r = etree.Element(etree.QName(TD, "GetCapabilitiesResponse"), nsmap=NSMAP); c = etree.SubElement(r, etree.QName(TD, "Capabilities"))
+    d = etree.SubElement(c, etree.QName(TT, "Device")); d.set("XAddr", f"http://{DEVICE_IP}:{HTTP_PORT}/onvif/device_service")
+    m = etree.SubElement(c, etree.QName(TT, "Media")); m.set("XAddr", f"http://{DEVICE_IP}:{HTTP_PORT}/onvif/media_service")
+    return response(r)
+
+
+def services():
+    r = etree.Element(etree.QName(TD, "GetServicesResponse"), nsmap=NSMAP); s = etree.SubElement(r, etree.QName(TD, "Service"))
+    etree.SubElement(s, etree.QName(TD, "Namespace")).text = MEDIA; etree.SubElement(s, etree.QName(TD, "XAddr")).text = f"http://{DEVICE_IP}:{HTTP_PORT}/onvif/media_service"
+    v = etree.SubElement(s, etree.QName(TD, "Version")); etree.SubElement(v, etree.QName(TT, "Major")).text = "2"; etree.SubElement(v, etree.QName(TT, "Minor")).text = "0"
+    return response(r)
+
+
+def profiles():
+    r = etree.Element(etree.QName(MEDIA, "GetProfilesResponse"), nsmap=NSMAP); p = etree.SubElement(r, etree.QName(TT, "Profiles")); p.set("token", "profile_1"); p.set("fixed", "true"); etree.SubElement(p, etree.QName(TT, "Name")).text = "Desktop H264"
+    e = etree.SubElement(p, etree.QName(TT, "VideoEncoderConfiguration")); e.set("token", "encoder_1"); etree.SubElement(e, etree.QName(TT, "Name")).text = "H264"; etree.SubElement(e, etree.QName(TT, "UseCount")).text = "1"; etree.SubElement(e, etree.QName(TT, "Encoding")).text = "H264"
+    res = etree.SubElement(e, etree.QName(TT, "Resolution")); etree.SubElement(res, etree.QName(TT, "Width")).text = "1920"; etree.SubElement(res, etree.QName(TT, "Height")).text = "1080"
+    return response(r)
+
+
+def stream_uri():
+    r = etree.Element(etree.QName(MEDIA, "GetStreamUriResponse"), nsmap=NSMAP); u = etree.SubElement(r, etree.QName(TT, "MediaUri")); etree.SubElement(u, etree.QName(TT, "Uri")).text = RTSP_URL; etree.SubElement(u, etree.QName(TT, "InvalidAfterConnect")).text = "false"; etree.SubElement(u, etree.QName(TT, "InvalidAfterReboot")).text = "false"; etree.SubElement(u, etree.QName(TT, "Timeout")).text = "PT0S"
+    return response(r)
+
+
+async def soap(request):
+    try: root = etree.fromstring(await request.read())
+    except etree.XMLSyntaxError: return fault("invalid XML")
+    if not authenticated(root): return fault("ONVIF authentication failed")
+    action = next((etree.QName(x).localname for x in root.iter() if x.tag.startswith("{") and etree.QName(x).localname.startswith(("Get", "Set"))), "")
+    return {"GetSystemDateAndTime":date_time, "GetDeviceInformation":device_info, "GetCapabilities":capabilities, "GetServices":services, "GetProfiles":profiles, "GetStreamUri":stream_uri}.get(action, lambda: fault(f"unsupported operation: {action}"))()
+
+
+app = web.Application(); app.router.add_post("/onvif/device_service", soap); app.router.add_post("/onvif/media_service", soap); app.router.add_get("/health", lambda r: web.json_response({"status":"ok"}))
+if __name__ == "__main__": web.run_app(app, host=DEVICE_IP, port=HTTP_PORT)
