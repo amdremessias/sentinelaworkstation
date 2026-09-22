@@ -66,6 +66,10 @@ def relay_forward(src, dst, initial=b""):
 
 
 def duplex(conn, up, initial_to_up=b""):
+    # create_connection() and the initial probe read use finite timeouts, but
+    # an RTSP session must survive slow DVR negotiation and idle keep-alives.
+    conn.settimeout(None)
+    up.settimeout(None)
     t1 = threading.Thread(target=relay_forward, args=(conn, up, initial_to_up), daemon=True)
     t2 = threading.Thread(target=relay_forward, args=(up, conn), daemon=True)
     t1.start()
@@ -94,7 +98,11 @@ def handle(conn, addr):
             if not chunk:
                 break
             head += chunk
-            if b"\n" in head:
+            # Read the complete RTSP/HTTP header when it is available. A DVR
+            # can split the request across TCP packets; classifying on the
+            # first line and forwarding that partial request upstream leaves
+            # MediaMTX waiting forever for the missing headers.
+            if b"\r\n\r\n" in head or b"\n\n" in head:
                 break
     except OSError:
         pass
@@ -108,6 +116,9 @@ def handle(conn, addr):
 
     first_line = head.split(b"\n", 1)[0].strip()
     method = first_line.split(b" ", 1)[0].strip().upper() if first_line else b""
+    # The 6s timeout above is only for the initial probe. Do not let it kill
+    # the long-lived RTSP connection while the DVR negotiates or plays.
+    conn.settimeout(None)
     is_rtsp = method in (
         b"DESCRIBE", b"SETUP", b"PLAY", b"TEARDOWN", b"ANNOUNCE",
         b"RECORD", b"GET_PARAMETER", b"SET_PARAMETER", b"PAUSE",
@@ -172,6 +183,7 @@ def handle(conn, addr):
                 (UPSTREAM.rsplit(":", 1)[0], int(UPSTREAM.rsplit(":", 1)[1])),
                 timeout=8.0,
             )
+            up.settimeout(None)
         except OSError as e:
             log(f"CONN {addr[0]}:{addr[1]} OPTIONS upstream-ERR {e!r} -> close")
             try:
@@ -179,10 +191,17 @@ def handle(conn, addr):
             except OSError:
                 pass
             return
-        rest = head
+        # The local OPTIONS response replaces the original request. Only
+        # forward bytes after its complete header (usually the next pipelined
+        # RTSP request); never forward a partial OPTIONS line upstream.
+        rest = b""
         idx = head.find(b"\r\n\r\n")
         if idx >= 0:
             rest = head[idx + 4:]
+        else:
+            idx = head.find(b"\n\n")
+            if idx >= 0:
+                rest = head[idx + 2:]
         duplex(conn, up, rest)
         return
 
@@ -193,6 +212,7 @@ def handle(conn, addr):
             (UPSTREAM.rsplit(":", 1)[0], int(UPSTREAM.rsplit(":", 1)[1])),
             timeout=8.0,
         )
+        up.settimeout(None)
         up.sendall(head)
     except OSError as e:
         log(f"CONN {addr[0]}:{addr[1]} upstream-ERR {e!r} -> close")
