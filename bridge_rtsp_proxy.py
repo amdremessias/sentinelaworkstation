@@ -91,6 +91,9 @@ def handle(conn, addr):
     if is_rtsp:
         # Forward (including the bytes already read) to upstream RTSP server.
         up = socket.create_connection((UPSTREAM_HOST, UPSTREAM_PORT), timeout=8.0)
+        # The connect timeout must not become an RTSP session timeout.
+        conn.settimeout(None)
+        up.settimeout(None)
         up.sendall(first)
         t1 = threading.Thread(target=relay, args=(conn, up), daemon=True)
         t2 = threading.Thread(target=relay, args=(up, conn), daemon=True)
